@@ -99,7 +99,7 @@ func (srv *SearchClient) FindUsers(req SearchRequest) (*SearchResponse, error) {
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
-
+	fmt.Println("blabla", string(body))
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		return nil, fmt.Errorf("Bad AccessToken")

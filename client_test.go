@@ -3,16 +3,18 @@ package main
 import (
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"testing"
 )
 
 func SearchServer(w http.ResponseWriter, r *http.Request) {
-	//func SearchServer() {
 	//получение данных из xml. Если это у нас не выйдет, то сервис недоступен
 	file, err := os.Open("dataset.xml")
 	if err != nil {
@@ -41,45 +43,42 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 
 	//поля из SearchRequest
 	limitStr := r.URL.Query().Get("limit")
-	var limit int
+
 	offsetStr := r.URL.Query().Get("offset")
-	var offset int
 	query := r.URL.Query().Get("query")
 	orderField := r.URL.Query().Get("order_field")
 	orderByStr := r.URL.Query().Get("order_by")
 	var orderBy int
 
+	// limit, offset := 0, 0
+	var (
+		limit  = 0
+		offset = 0
+	)
 	//проверяем интовые значения
 	if limitStr != "" {
-		limit, err = strconv.Atoi(limitStr)
-		if err != nil {
+		if limit, err = strconv.Atoi(limitStr); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("Limit must be integer"))
 			return
 		}
-	} else {
-		limit = 0
 	}
 	if offsetStr != "" {
-		offset, err = strconv.Atoi(offsetStr)
-		if err != nil {
+		if offset, err = strconv.Atoi(offsetStr); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("Offset must be integer"))
 			return
 		}
-	} else {
-		offset = 0
 	}
 	if orderByStr != "" {
+		fmt.Println("order by str ", orderByStr)
 		orderBy, err = strconv.Atoi(orderByStr)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("order_by must be -1, 0 or 1"))
 			return
 		}
-		x := orderBy != -1
-		x1 := orderBy != 0
-		if x || x1 || orderBy != 1 {
+		if orderBy != -1 && orderBy != 0 && orderBy != 1 {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("order_by must be -1, 0 or 1"))
 			return
@@ -95,7 +94,7 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 	x := orderField != "id"
 	x1 := orderField != "age"
 	x2 := orderField != "name"
-	if x || x1 || x2 || orderField != "" {
+	if x && x1 && x2 && orderField != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("order_field работает по полям `Id`, `Age`, `Name`"))
 		return
@@ -223,4 +222,31 @@ func (a ByName) Less(i, j int) bool {
 	return strings.Compare(a[i].LastName+" "+a[i].FirstName, a[j].LastName+" "+a[j].FirstName) < 0
 }
 
-//ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+type Test struct {
+}
+
+func TestClientAllOk(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+
+	sr := SearchRequest{
+		Limit:      2,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	sc := &SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+
+	var sresp *SearchResponse
+	var err error
+	if sresp, err = sc.FindUsers(sr); err != nil {
+		fmt.Println("error happened: ", err)
+		return
+	}
+
+	fmt.Printf("letter\n")
+	fmt.Println(sresp.Users)
+}
