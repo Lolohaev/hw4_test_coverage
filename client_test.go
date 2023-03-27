@@ -3,15 +3,16 @@ package main
 import (
 	"encoding/json"
 	"encoding/xml"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func SearchServer(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +44,6 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 
 	//поля из SearchRequest
 	limitStr := r.URL.Query().Get("limit")
-
 	offsetStr := r.URL.Query().Get("offset")
 	query := r.URL.Query().Get("query")
 	orderField := r.URL.Query().Get("order_field")
@@ -64,14 +64,13 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if offsetStr != "" {
-		if offset, err = strconv.Atoi(offsetStr); err != nil {
+		if offset, err = strconv.Atoi(offsetStr); err != nil || offset < 0 {
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("Offset must be integer"))
+			w.Write([]byte("Offset must be integer more than 0"))
 			return
 		}
 	}
 	if orderByStr != "" {
-		fmt.Println("order by str ", orderByStr)
 		orderBy, err = strconv.Atoi(orderByStr)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -146,14 +145,13 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 
 	lastElement := offset + limit
 	if lastElement > 0 {
-		if len(rows) >= lastElement {
-			rows = rows[offset:lastElement]
-		}
-		if len(rows) >= offset {
-			rows = rows[offset:]
-		}
 		if len(rows) < offset {
 			rows = make([]Row, 0)
+		}
+		if len(rows) >= lastElement {
+			rows = rows[offset:lastElement]
+		} else if len(rows) >= offset {
+			rows = rows[offset:]
 		}
 	}
 	users := make([]User, 0, len(rows))
@@ -222,14 +220,128 @@ func (a ByName) Less(i, j int) bool {
 	return strings.Compare(a[i].LastName+" "+a[i].FirstName, a[j].LastName+" "+a[j].FirstName) < 0
 }
 
-type Test struct {
+func (cur *User) Equals(compareTo *User) bool {
+	if cur == compareTo {
+		return true
+	}
+
+	if cur.Id != compareTo.Id || cur.Age != compareTo.Age || cur.About != compareTo.About || cur.Name != compareTo.Name || cur.Gender != compareTo.Gender {
+		return false
+	}
+	return true
+}
+
+func TestClientAllOkWithOffset(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	expectedResult := &SearchResponse{
+		Users: []User{
+			{
+				Id:     1,
+				Name:   "Mayer Hilda",
+				Age:    21,
+				About:  "Sit commodo consectetur minim amet ex. Elit aute mollit fugiat labore sint ipsum dolor cupidatat qui reprehenderit. Eu nisi in exercitation culpa sint aliqua nulla nulla proident eu. Nisi reprehenderit anim cupidatat dolor incididunt laboris mollit magna commodo ex. Cupidatat sit id aliqua amet nisi et voluptate voluptate commodo ex eiusmod et nulla velit.\n",
+				Gender: "female",
+			},
+		},
+		NextPage: true,
+	}
+
+	sr := SearchRequest{
+		Limit:      1,
+		Offset:     1,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+
+	sc := &SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+
+	var (
+		result *SearchResponse
+		err    error
+	)
+
+	if result, err = sc.FindUsers(sr); err != nil {
+		t.Errorf("error happened: %v", err)
+		return
+	}
+
+	if len(result.Users) != 1 {
+		t.Errorf("test failed - wrong users count")
+		return
+	}
+
+	if !reflect.DeepEqual(expectedResult, result) {
+		t.Errorf("test failed - results not match\nGot:\n%v\nExpected:\n%v", result, expectedResult)
+	}
 }
 
 func TestClientAllOk(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	expectedResult := &SearchResponse{
+		Users: []User{
+			{
+				Id:     0,
+				Name:   "Wolf Boyd",
+				Age:    22,
+				About:  "Nulla cillum enim voluptate consequat laborum esse excepteur occaecat commodo nostrud excepteur ut cupidatat. Occaecat minim incididunt ut proident ad sint nostrud ad laborum sint pariatur. Ut nulla commodo dolore officia. Consequat anim eiusmod amet commodo eiusmod deserunt culpa. Ea sit dolore nostrud cillum proident nisi mollit est Lorem pariatur. Lorem aute officia deserunt dolor nisi aliqua consequat nulla nostrud ipsum irure id deserunt dolore. Minim reprehenderit nulla exercitation labore ipsum.\n",
+				Gender: "male",
+			},
+			{
+				Id:     1,
+				Name:   "Mayer Hilda",
+				Age:    21,
+				About:  "Sit commodo consectetur minim amet ex. Elit aute mollit fugiat labore sint ipsum dolor cupidatat qui reprehenderit. Eu nisi in exercitation culpa sint aliqua nulla nulla proident eu. Nisi reprehenderit anim cupidatat dolor incididunt laboris mollit magna commodo ex. Cupidatat sit id aliqua amet nisi et voluptate voluptate commodo ex eiusmod et nulla velit.\n",
+				Gender: "female",
+			},
+		},
+		NextPage: true,
+	}
 
 	sr := SearchRequest{
 		Limit:      2,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+
+	sc := &SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+
+	var (
+		result *SearchResponse
+		err    error
+	)
+
+	if result, err = sc.FindUsers(sr); err != nil {
+		t.Errorf("error happened: %v", err)
+		return
+	}
+	if len(result.Users) != 2 {
+		t.Errorf("test failed - wrong users count")
+	}
+
+	if !reflect.DeepEqual(expectedResult, result) {
+		t.Errorf("test failed - results not match\nGot:\n%v\nExpected:\n%v", result, expectedResult)
+	}
+}
+
+func TestClientBigLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	sr := SearchRequest{
+		Limit:      27,
 		Offset:     0,
 		Query:      "",
 		OrderField: "",
@@ -239,14 +351,152 @@ func TestClientAllOk(t *testing.T) {
 		AccessToken: "TestToken",
 		URL:         ts.URL,
 	}
+	var (
+		result *SearchResponse
+		err    error
+	)
 
-	var sresp *SearchResponse
-	var err error
-	if sresp, err = sc.FindUsers(sr); err != nil {
-		fmt.Println("error happened: ", err)
+	if result, err = sc.FindUsers(sr); err != nil {
+		t.Errorf("error happened: %v", err)
 		return
 	}
+	if len(result.Users) != 25 {
+		t.Errorf("error happened - limit must be 25, but actual limit is %v", len(result.Users))
+	}
+}
 
-	fmt.Printf("letter\n")
-	fmt.Println(sresp.Users)
+func TestClientWrongLimit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	request := SearchRequest{
+		Limit:      -1,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+
+	result, err := client.FindUsers(request)
+
+	if err.Error() != "limit must be > 0" {
+		t.Errorf("test failed - wrong error")
+	}
+
+	if result != nil || err == nil {
+		t.Errorf("test failed - error expected")
+	}
+}
+func TestClientWrongOffset(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     -1,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+
+	result, err := client.FindUsers(request)
+
+	if err.Error() != "offset must be > 0" {
+		t.Errorf("test failed - wrong error")
+	}
+
+	if result != nil || err == nil {
+		t.Errorf("test failed - error expected")
+	}
+}
+
+func TestClientTimeOut(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer ts.Close()
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+
+	if response != nil || err.Error() != "timeout for limit=2&offset=0&order_by=0&order_field=&query=" {
+		t.Error("test failed - must be timeout error")
+	}
+}
+
+func TestClientNotAuthorized(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+	client := SearchClient{
+		AccessToken: "WrongToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+	if response != nil || err.Error() != "Bad AccessToken" {
+		t.Error("test failed - must be auth error")
+	}
+}
+
+func TestClientBadUrl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         "BadUrl",
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+	if response != nil || err.Error() != `unknown error Get "BadUrl?limit=2&offset=0&order_by=0&order_field=&query=": unsupported protocol scheme ""` {
+		t.Error("test failed - must be BadUrl error")
+	}
+}
+
+func TestClientBadRequest(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     0,
+		Query:      "",
+		OrderField: "badfield",
+		OrderBy:    0,
+	}
+	//response, err := client.FindUsers(request)
+
 }
