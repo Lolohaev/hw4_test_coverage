@@ -48,12 +48,12 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
 	orderField := r.URL.Query().Get("order_field")
 	orderByStr := r.URL.Query().Get("order_by")
-	var orderBy int
 
-	// limit, offset := 0, 0
+	// limit, offset, orderBy := 0, 0, 0
 	var (
-		limit  = 0
-		offset = 0
+		limit   = 0
+		offset  = 0
+		orderBy = 0
 	)
 	//проверяем интовые значения
 	if limitStr != "" {
@@ -82,8 +82,6 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("order_by must be -1, 0 or 1"))
 			return
 		}
-	} else {
-		orderBy = 0
 	}
 
 	//проверка валидности поля orderField
@@ -95,7 +93,7 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 	x2 := orderField != "name"
 	if x && x1 && x2 && orderField != "" {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("order_field работает по полям `Id`, `Age`, `Name`"))
+		w.Write([]byte(`{"Error":"ErrorBadOrderField"}`))
 		return
 	}
 	//если пустой - то возвращаем по `Name`
@@ -112,8 +110,11 @@ func SearchServer(w http.ResponseWriter, r *http.Request) {
 				resultRows = append(resultRows, row)
 			}
 		}
-	} else {
-		resultRows = rows
+		if len(resultRows) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{}`))
+			return
+		}
 	}
 
 	//сортировки
@@ -252,8 +253,8 @@ func TestClientAllOkWithOffset(t *testing.T) {
 		Limit:      1,
 		Offset:     1,
 		Query:      "",
-		OrderField: "",
-		OrderBy:    0,
+		OrderField: "Id",
+		OrderBy:    1,
 	}
 
 	sc := &SearchClient{
@@ -273,6 +274,58 @@ func TestClientAllOkWithOffset(t *testing.T) {
 
 	if len(result.Users) != 1 {
 		t.Errorf("test failed - wrong users count")
+		return
+	}
+
+	if !reflect.DeepEqual(expectedResult, result) {
+		t.Errorf("test failed - results not match\nGot:\n%v\nExpected:\n%v", result, expectedResult)
+	}
+}
+
+func TestClientAllOkLastElements(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	expectedResult := &SearchResponse{
+		Users: []User{
+			{
+				Id:     33,
+				Name:   "Snow Twila",
+				Age:    36,
+				About:  "Sint non sunt adipisicing sit laborum cillum magna nisi exercitation. Dolore officia esse dolore officia ea adipisicing amet ea nostrud elit cupidatat laboris. Proident culpa ullamco aute incididunt aute. Laboris et nulla incididunt consequat pariatur enim dolor incididunt adipisicing enim fugiat tempor ullamco. Amet est ullamco officia consectetur cupidatat non sunt laborum nisi in ex. Quis labore quis ipsum est nisi ex officia reprehenderit ad adipisicing fugiat. Labore fugiat ea dolore exercitation sint duis aliqua.\n",
+				Gender: "female",
+			},
+			{
+				Id:     34,
+				Name:   "Sharp Kane",
+				Age:    34,
+				About:  "Lorem proident sint minim anim commodo cillum. Eiusmod velit culpa commodo anim consectetur consectetur sint sint labore. Mollit consequat consectetur magna nulla veniam commodo eu ut et. Ut adipisicing qui ex consectetur officia sint ut fugiat ex velit cupidatat fugiat nisi non. Dolor minim mollit aliquip veniam nostrud. Magna eu aliqua Lorem aliquip.\n",
+				Gender: "male",
+			},
+		},
+		NextPage: false,
+	}
+
+	sr := SearchRequest{
+		Limit:      10,
+		Offset:     33,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+
+	sc := &SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+
+	var (
+		result *SearchResponse
+		err    error
+	)
+
+	if result, err = sc.FindUsers(sr); err != nil {
+		t.Errorf("error happened: %v", err)
 		return
 	}
 
@@ -497,6 +550,105 @@ func TestClientBadRequest(t *testing.T) {
 		OrderField: "badfield",
 		OrderBy:    0,
 	}
-	//response, err := client.FindUsers(request)
+	response, err := client.FindUsers(request)
 
+	if response != nil || err.Error() != `OrderFeld badfield invalid` {
+		t.Error("test failed - must be Bad Request error")
+	}
+}
+
+func TestFindUsersStatusInternalServerError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(""))
+	}))
+	defer ts.Close()
+
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     0,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+	if response != nil || err.Error() != "SearchServer fatal error" {
+		t.Error("test failed - must be SearchServer fatal error")
+	}
+}
+
+func TestFindUsersUnknownError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer ts.Close()
+
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     1,
+		Query:      "SomeWrongParameter",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+
+	if response != nil || !strings.Contains(err.Error(), "unknown bad request") {
+		t.Error("test failed - must be unknown bad request fatal error")
+	}
+}
+
+func TestServerWrongServer(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("{bad Json}"))
+	}))
+	defer ts.Close()
+
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     1,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+
+	if response != nil || !strings.Contains(err.Error(), "cant unpack error json") {
+		t.Error("test failed - must be bad request fatal error")
+	}
+}
+
+func TestServerWrongData(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{bad Json}"))
+	}))
+	defer ts.Close()
+
+	client := SearchClient{
+		AccessToken: "TestToken",
+		URL:         ts.URL,
+	}
+	request := SearchRequest{
+		Limit:      1,
+		Offset:     1,
+		Query:      "",
+		OrderField: "",
+		OrderBy:    0,
+	}
+	response, err := client.FindUsers(request)
+
+	if response != nil || !strings.Contains(err.Error(), "cant unpack result json") {
+		t.Error("test failed - must be cant unpack result json error")
+	}
 }
